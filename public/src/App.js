@@ -89,6 +89,7 @@ const sample = {
   cliente: "Nome do Cliente",
   clientePhone: "(47) 9 8888-8888",
   clienteEmail: "cliente@email.com",
+  recursosCliente: 0,
   empreendimento: "Nome do Empreendimento",
   endereco: "Endereço completo — Itajaí/SC",
   construtora: "Nome da Construtora",
@@ -100,8 +101,11 @@ const sample = {
   splitPreset: "10-45-45",
   entradaValor: 98000,
   entradaPercent: 10,
-  duranteObraPercent: 45,
+  // obra por parcela (novo)
+  obraParcelaValor: 12250,
   duranteObraParcelas: 36,
+  // ainda mantemos percent para fallback/compat
+  duranteObraPercent: 45,
   chavesPercent: 45,
   chavesForma: 'financiamento', // 'financiamento' | 'avista' | 'posConstrutora'
   chavesPosParcelas: 0,
@@ -124,7 +128,7 @@ const sample = {
 /********************
  * Main component
  ********************/
-export default function AlvoPropostasV2() {
+export default function AlvoPropostasV3() {
   const [data, setData] = useState(sample);
   const previewRef = useRef(null);
 
@@ -135,6 +139,7 @@ export default function AlvoPropostasV2() {
     setData((d) => ({
       ...d,
       entradaPercent: e,
+      // não sobrescreveremos obraParcelaValor, apenas % fallback
       duranteObraPercent: o,
       chavesPercent: c,
       entradaValor: d.valorTotal ? (d.valorTotal * e) / 100 : d.entradaValor,
@@ -146,8 +151,18 @@ export default function AlvoPropostasV2() {
     const total = Number(data.valorTotal || 0);
     const entradaValor = Number(data.entradaValor || 0) || (total * Number(data.entradaPercent || 0) / 100);
     const entradaPercent = total > 0 ? (entradaValor / total) * 100 : 0;
-    const duranteObraTotal = total * Number(data.duranteObraPercent || 0) / 100;
-    const duranteObraParcela = data.duranteObraParcelas ? (duranteObraTotal / Number(data.duranteObraParcelas)) : 0;
+
+    const parcelasObra = Number(data.duranteObraParcelas || 0);
+    let duranteObraParcela = Number(data.obraParcelaValor || 0);
+    let duranteObraTotal;
+    if (duranteObraParcela > 0 && parcelasObra > 0) {
+      duranteObraTotal = duranteObraParcela * parcelasObra;
+    } else {
+      duranteObraTotal = total * Number(data.duranteObraPercent || 0) / 100;
+      duranteObraParcela = parcelasObra > 0 ? (duranteObraTotal / parcelasObra) : 0;
+    }
+    const duranteObraPercentCalc = total > 0 ? (100 * duranteObraTotal / total) : 0;
+
     const chavesTotal = total * Number(data.chavesPercent || 0) / 100;
 
     const chavesFinanciado = data.chavesForma === 'financiamento';
@@ -155,38 +170,39 @@ export default function AlvoPropostasV2() {
       ? entradaValor + duranteObraTotal
       : entradaValor + duranteObraTotal + chavesTotal;
 
+    // Saldo a compor (quanto falta achar do cliente)
+    const recursosCliente = Number(data.recursosCliente || 0);
+    const saldoACompor = Math.max(0, valorInvestidoReal - recursosCliente);
+
     // cronograma
     const hoje = new Date();
     const schedule = [];
     if (entradaValor > 0) schedule.push({ tipo: 'Entrada', data: hoje, valor: entradaValor });
-    const n = Number(data.duranteObraParcelas || 0);
-    for (let i = 1; i <= n; i++) {
+    for (let i = 1; i <= parcelasObra; i++) {
       const d = new Date(hoje);
       d.setMonth(d.getMonth() + i);
-      schedule.push({ tipo: `Obra ${i}/${n}`, data: d, valor: duranteObraParcela });
+      schedule.push({ tipo: `Obra ${i}/${parcelasObra}`, data: d, valor: duranteObraParcela });
     }
     if (data.chavesForma === 'avista' && chavesTotal > 0) {
       const d = new Date(hoje);
-      d.setMonth(d.getMonth() + n + 1);
+      d.setMonth(d.getMonth() + parcelasObra + 1);
       schedule.push({ tipo: 'Chaves (à vista)', data: d, valor: chavesTotal });
     }
     if (data.chavesForma === 'posConstrutora' && chavesTotal > 0) {
       const parcelas = Number(data.chavesPosParcelas || 0);
       for (let i = 1; i <= parcelas; i++) {
         const d = new Date(hoje);
-        d.setMonth(d.getMonth() + n + i);
+        d.setMonth(d.getMonth() + parcelasObra + i);
         schedule.push({ tipo: `Pós-chaves ${i}/${parcelas}`, data: d, valor: chavesTotal / Math.max(parcelas, 1) });
       }
     }
-    // Balões pós-chaves (após chaves ou pós-chaves com construtora)
+    // Balões pós-chaves
     const q = Math.max(0, Number(data.balaoQuantidade || 0));
     const vBalao = Math.max(0, Number(data.balaoValor || 0));
     const freq = Math.max(1, Number(data.balaoFrequenciaMeses || 1));
     if (q > 0 && vBalao > 0) {
-      let startOffset = n + 1; // default: logo após chaves
-      if (data.chavesForma === 'posConstrutora') {
-        startOffset = n + Number(data.chavesPosParcelas || 0) + 1;
-      }
+      let startOffset = parcelasObra + 1; // logo após chaves
+      if (data.chavesForma === 'posConstrutora') startOffset = parcelasObra + Number(data.chavesPosParcelas || 0) + 1;
       for (let i = 0; i < q; i++) {
         const d = new Date(hoje);
         d.setMonth(d.getMonth() + startOffset + i * freq);
@@ -194,7 +210,7 @@ export default function AlvoPropostasV2() {
       }
     }
 
-    return { total, entradaValor, entradaPercent, duranteObraTotal, duranteObraParcela, chavesTotal, valorInvestidoReal, schedule };
+    return { total, entradaValor, entradaPercent, duranteObraTotal, duranteObraParcela, duranteObraPercent: duranteObraPercentCalc, chavesTotal, valorInvestidoReal, recursosCliente, saldoACompor, schedule };
   }, [data]);
 
   // Fluxos auxiliares: retorna array de fluxos mensais considerando obra, chaves e balões
@@ -224,7 +240,6 @@ export default function AlvoPropostasV2() {
       let startAfter = mesesObra + 1;
       if (data.chavesForma === 'posConstrutora') startAfter = mesesObra + Number(data.chavesPosParcelas || 0) + 1;
       for (let i = 0; i < q; i++) {
-        // preencher zeros até a posição do balão se necessário
         const targetIndex = startAfter + i * freq;
         while (fluxos.length < targetIndex) fluxos.push(0);
         fluxos.push(-vBalao);
@@ -323,19 +338,19 @@ export default function AlvoPropostasV2() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100">
       {/* Top bar */}
-      <div className="sticky top-0 z-40 bg-white/80 backdrop-blur border-b">
+      <div className="sticky top-0 z-40 backdrop-blur border-b bg-white/80">
         <div className="mx-auto max-w-7xl px-4 py-3 flex flex-wrap items-center gap-3">
-          <AlvoLogo size={32} />
+          <AlvoLogo size={36} />
           <div className="flex-1 min-w-[200px]">
-            <h1 className="text-lg font-semibold">Alvo Propostas</h1>
+            <h1 className="text-xl font-semibold tracking-tight">Alvo Propostas</h1>
             <p className="text-xs text-gray-500">ROI • ROAS • TIR • Cronograma de Pagamento</p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={fillExample} className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-sm">Exemplo</button>
-            <button onClick={clearAll} className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-sm">Limpar</button>
-            <button onClick={savePDF} className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium">Baixar PDF</button>
+            <button onClick={fillExample} className="px-3 py-2 rounded-2xl bg-white shadow-sm border hover:bg-gray-50 text-sm">Exemplo</button>
+            <button onClick={clearAll} className="px-3 py-2 rounded-2xl bg-white shadow-sm border hover:bg-gray-50 text-sm">Limpar</button>
+            <button onClick={savePDF} className="px-3 py-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium shadow">Baixar PDF</button>
           </div>
         </div>
       </div>
@@ -358,9 +373,8 @@ export default function AlvoPropostasV2() {
             <div className="grid grid-cols-2 gap-3">
               <Input label="Nome" value={data.cliente || ""} onChange={handle("cliente")} />
               <Input label="Telefone" value={data.clientePhone || ""} onChange={handle("clientePhone")} />
-              <div className="col-span-2">
-                <Input label="E-mail" value={data.clienteEmail || ""} onChange={handle("clienteEmail")} />
-              </div>
+              <Input label="E-mail" value={data.clienteEmail || ""} onChange={handle("clienteEmail")} />
+              <Input label="Recursos disponíveis (R$)" value={data.recursosCliente ?? ''} onChange={handleNumeric('recursosCliente')} />
             </div>
           </Card>
 
@@ -376,10 +390,10 @@ export default function AlvoPropostasV2() {
           </Card>
 
           <Card title="Fluxo de Pagamento">
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <Input label="Valor total" value={data.valorTotal ?? ""} onChange={handleNumeric("valorTotal")} />
-                <select className="w-full px-3 py-2 rounded-xl border focus:outline-none focus:ring-2 focus:ring-emerald-500" value={data.splitPreset}
+                <select className="w-full px-3 py-2 rounded-xl border bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-500" value={data.splitPreset}
                         onChange={(e)=>setData(d=>({...d, splitPreset: e.target.value}))}>
                   <option value="10-45-45">Preset 10 / 45 / 45</option>
                   <option value="20-40-40">Preset 20 / 40 / 40</option>
@@ -388,15 +402,15 @@ export default function AlvoPropostasV2() {
                 </select>
                 <Input label="Entrada (R$)" value={data.entradaValor ?? ""} onChange={handleNumeric("entradaValor")} />
                 <Input label="Entrada (%)" value={data.entradaPercent ?? ""} onChange={handlePercent("entradaPercent")} />
-                <Input label="Obra (%)" value={data.duranteObraPercent ?? ""} onChange={handlePercent("duranteObraPercent")} />
-                <Input label="Parcelas de obra" value={data.duranteObraParcelas ?? ""} onChange={handleNumeric("duranteObraParcelas")} />
+                <Input label="Parcela de obra (R$)" value={data.obraParcelaValor ?? ''} onChange={handleNumeric('obraParcelaValor')} />
+                <Input label="Qtd de parcelas de obra" value={data.duranteObraParcelas ?? ""} onChange={handleNumeric("duranteObraParcelas")} />
                 <Input label="Chaves (%)" value={data.chavesPercent ?? ""} onChange={handlePercent("chavesPercent")} />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
                   <div className="text-xs text-gray-600 mb-1">Forma das chaves</div>
-                  <select className="w-full px-3 py-2 rounded-xl border focus:outline-none focus:ring-2 focus:ring-emerald-500" value={data.chavesForma}
+                  <select className="w-full px-3 py-2 rounded-xl border bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-500" value={data.chavesForma}
                     onChange={(e)=>setData(d=>({...d, chavesForma: e.target.value}))}>
                     <option value="financiamento">Financiamento bancário</option>
                     <option value="avista">À vista na entrega</option>
@@ -414,20 +428,29 @@ export default function AlvoPropostasV2() {
                 <Input label="Frequência (meses)" value={data.balaoFrequenciaMeses ?? ''} onChange={handleNumeric('balaoFrequenciaMeses')} />
               </div>
 
-              <div className="text-xs bg-emerald-50 border border-emerald-200 rounded-xl p-3">
-                <p className="font-semibold mb-1">Resumo automático</p>
-                <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
-                  <li>Entrada: <strong>{brl(valores.entradaValor)} ({pct(valores.entradaPercent)})</strong></li>
-                  <li>Obra: <strong>{brl(valores.duranteObraTotal)}</strong> em <strong>{data.duranteObraParcelas}x</strong> ({brl(valores.duranteObraParcela)}/mês)</li>
-                  <li>Chaves: <strong>{brl(valores.chavesTotal)}</strong> {data.chavesForma==='financiamento' ? '(financiado)' : data.chavesForma==='posConstrutora' ? `em ${(data.chavesPosParcelas||0)}x` : ''}</li>
-                  {Number(data.balaoQuantidade)>0 && Number(data.balaoValor)>0 && (
-                    <li>Balões: <strong>{data.balaoQuantidade}× {brl(data.balaoValor)}</strong> a cada <strong>{data.balaoFrequenciaMeses}</strong> meses</li>
-                  )}
-                  <li>Investimento real: <strong>{brl(valores.valorInvestidoReal)}</strong></li>
-                </ul>
+              <div className="bg-white border rounded-2xl p-4 shadow-sm">
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className="text-sm">
+                    <p className="font-semibold mb-2 text-emerald-800">Resumo automático</p>
+                    <ul className="space-y-1">
+                      <li>Entrada: <strong>{brl(valores.entradaValor)} ({pct(valores.entradaPercent)})</strong></li>
+                      <li>Obra: <strong>{brl(valores.duranteObraTotal)}</strong> em <strong>{data.duranteObraParcelas}x</strong> ({brl(valores.duranteObraParcela)}/mês) — {pct(valores.duranteObraPercent)}</li>
+                      <li>Chaves: <strong>{brl(valores.chavesTotal)}</strong> {data.chavesForma==='financiamento' ? '(financiado)' : data.chavesForma==='posConstrutora' ? `em ${(data.chavesPosParcelas||0)}x` : ''}</li>
+                      {Number(data.balaoQuantidade)>0 && Number(data.balaoValor)>0 && (
+                        <li>Balões: <strong>{data.balaoQuantidade}× {brl(data.balaoValor)}</strong> a cada <strong>{data.balaoFrequenciaMeses}</strong> meses</li>
+                      )}
+                    </ul>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 border p-3">
+                    <p className="text-sm">Investimento real</p>
+                    <p className="text-2xl font-bold">{brl(valores.valorInvestidoReal)}</p>
+                    <div className="mt-2 text-sm">Recursos do cliente: <strong>{brl(valores.recursosCliente)}</strong></div>
+                    <div className="mt-1 text-sm">Saldo a compor: <strong className="text-rose-700">{brl(valores.saldoACompor)}</strong></div>
+                  </div>
+                </div>
               </div>
 
-              <details className="bg-white border rounded-xl p-3">
+              <details className="bg-white border rounded-2xl p-4 shadow-sm">
                 <summary className="cursor-pointer font-medium">Ver cronograma detalhado (datas e valores)</summary>
                 <div className="mt-3 max-h-64 overflow-auto text-sm">
                   <table className="w-full">
@@ -473,11 +496,11 @@ export default function AlvoPropostasV2() {
 
         {/* right column */}
         <div className="lg:col-span-3">
-          <div ref={previewRef} className="proposta-preview bg-white shadow-sm rounded-2xl overflow-hidden">
-            <div className="p-8 border-b">
+          <div ref={previewRef} className="proposta-preview bg-white shadow-md rounded-3xl overflow-hidden ring-1 ring-slate-200">
+            <div className="p-8 border-b bg-gradient-to-r from-slate-50 to-white">
               <div className="flex items-center justify-between gap-4">
                 <div className="min-w-0">
-                  <h2 className="text-2xl font-bold">Proposta Comercial</h2>
+                  <h2 className="text-3xl font-extrabold tracking-tight">Proposta Comercial</h2>
                   <p className="text-sm text-gray-500 truncate">{data.company}</p>
                   <p className="text-sm text-gray-500">{data.date} · {data.consultor}</p>
                   <p className="text-sm text-gray-500">{data.phone} · {data.email}</p>
@@ -487,7 +510,7 @@ export default function AlvoPropostasV2() {
                     </a>
                   )}
                 </div>
-                <AlvoLogo size={50} />
+                <AlvoLogo size={56} />
               </div>
             </div>
 
@@ -525,12 +548,14 @@ export default function AlvoPropostasV2() {
               <div className="space-y-1 text-sm">
                 <DataRow k="Valor total" v={brl(valores.total)} />
                 <DataRow k="Entrada" v={brl(valores.entradaValor) + " (" + pct(valores.entradaPercent) + ")"} />
-                <DataRow k="Obra" v={brl(valores.duranteObraTotal) + " em " + (data.duranteObraParcelas||0) + "x (" + brl(valores.duranteObraParcela) + ")"} />
+                <DataRow k="Obra" v={brl(valores.duranteObraTotal) + " em " + (data.duranteObraParcelas||0) + "x (" + brl(valores.duranteObraParcela) + ") — " + pct(valores.duranteObraPercent)} />
                 <DataRow k="Chaves" v={brl(valores.chavesTotal) + (data.chavesForma==='financiamento' ? ' (Financ.)' : data.chavesForma==='posConstrutora' ? ` em ${(data.chavesPosParcelas||0)}x` : '')} />
                 {Number(data.balaoQuantidade)>0 && Number(data.balaoValor)>0 && (
                   <DataRow k="Balões" v={`${data.balaoQuantidade}× ${brl(data.balaoValor)} a cada ${data.balaoFrequenciaMeses} meses`} />
                 )}
                 <DataRow k="Investimento" v={brl(valores.valorInvestidoReal)} />
+                <DataRow k="Recursos do cliente" v={brl(valores.recursosCliente)} />
+                <DataRow k="Saldo a compor" v={brl(valores.saldoACompor)} />
                 <DataRow k="Validade" v={data.validade} />
               </div>
             </section>
@@ -639,9 +664,9 @@ export default function AlvoPropostasV2() {
  ********************/
 function Card({ title, children }) {
   return (
-    <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
-      <div className="px-4 py-3 border-b">
-        <h4 className="font-semibold">{title}</h4>
+    <div className="bg-white rounded-3xl shadow-sm border overflow-hidden ring-1 ring-slate-200">
+      <div className="px-4 py-3 border-b bg-gradient-to-r from-slate-50 to-white">
+        <h4 className="font-semibold tracking-tight">{title}</h4>
       </div>
       <div className="p-4">{children}</div>
     </div>
@@ -653,7 +678,7 @@ function Input({ label, value, onChange, placeholder }) {
     <label className="block">
       <div className="text-xs text-gray-600 mb-1">{label}</div>
       <input
-        className="w-full px-3 py-2 rounded-xl border focus:outline-none focus:ring-2 focus:ring-emerald-500"
+        className="w-full px-3 py-2 rounded-xl border focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
         value={value ?? ""}
         onChange={onChange}
         placeholder={placeholder}
@@ -664,8 +689,8 @@ function Input({ label, value, onChange, placeholder }) {
 
 function DataRow({ k, v }) {
   return (
-    <div className="flex gap-2 py-1 border-b border-dashed border-gray-100">
-      <div className="w-32 text-gray-500">{k}</div>
+    <div className="flex gap-2 py-2 border-b border-dashed border-gray-100">
+      <div className="w-40 text-gray-500">{k}</div>
       <div className="flex-1 font-medium">{v || "—"}</div>
     </div>
   );
@@ -689,6 +714,6 @@ function TR({ label, value }) {
     console.assert(pct(12.345).startsWith('12'), 'pct formato');
     const tir = calcularTIR([-100, 60, 60]);
     console.assert(tir > 10 && tir < 50, 'TIR plausível');
-    console.debug('[AlvoPropostasV2] testes rápidos OK');
-  } catch(e) { console.warn('[AlvoPropostasV2] teste falhou', e); }
+    console.debug('[AlvoPropostasV3] testes rápidos OK');
+  } catch(e) { console.warn('[AlvoPropostasV3] teste falhou', e); }
 })();
