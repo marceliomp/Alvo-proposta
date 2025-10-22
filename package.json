@@ -31,18 +31,4 @@
     ]
   }
 }
-```
 
-4. Clique em **"Commit changes"**
-
----
-
-### **3️⃣ Criar arquivo `.gitignore`**
-
-1. **"Add file"** → **"Create new file"**
-2. Nome: `.gitignore`
-3. Cole:
-```
-node_modules
-build
-.DS_Store
